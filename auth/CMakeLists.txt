@@ -48,9 +48,44 @@ install(
     RUNTIME DESTINATION "/usr/bin"
     LIBRARY DESTINATION "/usr/lib/biopass"
 )
+# PAM modules must land in the directory the system's PAM actually searches,
+# which varies by distro/architecture (Fedora/RHEL/SUSE x86_64 use
+# /lib64/security; Debian/Ubuntu use the multiarch /lib/<triplet>/security;
+# others use /lib/security). Probe for pam_unix.so -- present in every PAM
+# install -- to find the real one instead of hardcoding a single distro's path.
+# Override with -DPAM_MODULE_DIR=... if detection guesses wrong.
+if(NOT DEFINED PAM_MODULE_DIR)
+    set(_pam_candidate_dirs "")
+    if(CMAKE_LIBRARY_ARCHITECTURE)
+        list(APPEND _pam_candidate_dirs
+             "/lib/${CMAKE_LIBRARY_ARCHITECTURE}/security"
+             "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/security")
+    endif()
+    list(APPEND _pam_candidate_dirs
+         "/lib64/security" "/usr/lib64/security"
+         "/lib/security" "/usr/lib/security")
+    foreach(_dir IN LISTS _pam_candidate_dirs)
+        if(EXISTS "${_dir}/pam_unix.so")
+            set(PAM_MODULE_DIR "${_dir}")
+            break()
+        endif()
+    endforeach()
+endif()
+if(NOT DEFINED PAM_MODULE_DIR)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND IS_DIRECTORY "/lib64")
+        set(PAM_MODULE_DIR "/lib64/security")
+    else()
+        set(PAM_MODULE_DIR "/lib/security")
+    endif()
+    message(WARNING
+        "Biopass: could not locate an existing PAM module dir (pam_unix.so); "
+        "defaulting to ${PAM_MODULE_DIR}. Override with -DPAM_MODULE_DIR=... if wrong.")
+endif()
+message(STATUS "Biopass: installing PAM module to ${PAM_MODULE_DIR}")
+
 install(
     TARGETS biopass_pam
-    LIBRARY DESTINATION "/lib64/security"
+    LIBRARY DESTINATION "${PAM_MODULE_DIR}"
 )
 
 # Install ONNX Runtime libraries
