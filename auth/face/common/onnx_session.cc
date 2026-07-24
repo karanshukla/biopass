@@ -1,11 +1,21 @@
 #include "onnx_session.h"
 
+#include <algorithm>
+#include <thread>
+
 namespace biopass {
 
 OnnxSession::OnnxSession(const std::string& model_path, const char* log_name)
     : env_(ORT_LOGGING_LEVEL_WARNING, log_name) {
   Ort::SessionOptions opts;
-  opts.SetIntraOpNumThreads(1);
+  // Intra-op parallelism: model inference (YOLO detection especially) is the
+  // dominant CPU cost of a warm authentication, and single-threaded left most
+  // cores idle. Cap at 4 so that if two sessions ever run concurrently (e.g.
+  // the AI + IR anti-spoofing checks via std::async) they don't badly
+  // oversubscribe, and clamp to the machine's actual core count.
+  const unsigned hw = std::thread::hardware_concurrency();
+  const int intra_op_threads = static_cast<int>(std::max(1u, std::min(4u, hw == 0 ? 1u : hw)));
+  opts.SetIntraOpNumThreads(intra_op_threads);
   opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
   session_ = std::make_unique<Ort::Session>(env_, model_path.c_str(), opts);
