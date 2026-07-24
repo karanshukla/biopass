@@ -50,7 +50,7 @@ install(
 )
 install(
     TARGETS biopass_pam
-    LIBRARY DESTINATION "/lib/security"
+    LIBRARY DESTINATION "/lib64/security"
 )
 
 # Install ONNX Runtime libraries

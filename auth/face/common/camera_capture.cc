@@ -279,12 +279,39 @@ class LibcameraCaptureSession : public ICameraCaptureSession {
 
   ~LibcameraCaptureSession() override { close(); }
 
-  bool isOpen() const override { return started_; }
+  // "Open" now means acquire()/configure()/buffers are ready, not that the
+  // camera is actively streaming -- see startStreaming()/stopStreaming().
+  bool isOpen() const override { return acquired_; }
 
   ImageRGB capture() override {
     if (!isOpen()) {
       return {};
     }
+
+    if (!startStreaming()) {
+      return {};
+    }
+    // On return, RGB sessions stop streaming so the sensor (and its indicator
+    // LED) is only powered for the duration of an actual capture, even though
+    // acquire()/configure()/buffers stay resident for next time.
+    //
+    // Grey/IR sessions deliberately keep streaming between captures: the IR
+    // anti-spoofing presence check reuses one session across many rapid,
+    // back-to-back captures, and the IR emitter plus the sensor's
+    // auto-exposure/gain need to stay continuously warm across that loop.
+    // Stopping and cold-restarting the stream per capture gives the emitter
+    // only a few frames to ramp from dark, yielding black/underexposed frames
+    // and false "no face present" failures. IR sessions are ephemeral (torn
+    // down at endAuthenticationSession()), so close() -- which always calls
+    // stopStreaming() -- still powers the emitter down the moment auth ends.
+    struct StopGuard {
+      LibcameraCaptureSession* self;
+      ~StopGuard() {
+        if (!self->is_grey_) {
+          self->stopStreaming();
+        }
+      }
+    } stop_guard{this};
 
     const bool has_timeout = capture_timeout_ms_ > 0;
     const auto deadline = std::chrono::steady_clock::now() +
@@ -320,6 +347,46 @@ class LibcameraCaptureSession : public ICameraCaptureSession {
       return {};
     }
     return image;
+  }
+
+  // Power the sensor/emitter on ahead of the first capture() so a caller can
+  // overlap the warmup ramp with other work (see checkAntispoofByIRCamera's
+  // stabilisation delay). Grey/IR sessions then keep streaming across the
+  // presence loop; RGB sessions stop again after their next capture().
+  void warmUp() override { startStreaming(); }
+
+  // Public (rather than private) so the local StopGuard type inside
+  // capture() above can call stopStreaming() -- a class defined inside a
+  // member function body is an ordinary local class in C++, not a nested
+  // class, so it gets no implicit access to this class's private section.
+  bool startStreaming() {
+    if (streaming_) {
+      return true;
+    }
+    if (camera_->start() < 0) {
+      spdlog::error("FaceAuth: Failed to start camera '{}'", camera_label_);
+      return false;
+    }
+    streaming_ = true;
+    for (auto& request : requests_) {
+      request->reuse(libcamera::Request::ReuseBuffers);
+      if (camera_->queueRequest(request.get()) < 0) {
+        spdlog::error("FaceAuth: Failed to queue request for '{}'", camera_label_);
+        stopStreaming();
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void stopStreaming() {
+    if (!streaming_) {
+      return;
+    }
+    camera_->stop();
+    streaming_ = false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    completed_.clear();
   }
 
  private:
@@ -395,21 +462,14 @@ class LibcameraCaptureSession : public ICameraCaptureSession {
       ready_.notify_one();
     });
 
-    if (camera_->start() < 0) {
-      spdlog::error("FaceAuth: Failed to start camera '{}'", camera_label_);
-      camera_->requestCompleted.disconnect(&connection_token_);
-      return false;
-    }
-    started_ = true;
-
-    for (auto& request : requests_) {
-      if (camera_->queueRequest(request.get()) < 0) {
-        spdlog::error("FaceAuth: Failed to queue initial request for '{}'", camera_label_);
-        started_ = false;
-        return false;
-      }
-    }
-
+    // Deliberately do NOT start the camera here. Everything above (acquire,
+    // configure, buffer allocation) is the expensive, non-streaming part --
+    // device enumeration, format negotiation, DMA buffer setup -- and is
+    // safe to leave resident across many capture() calls. Streaming is what
+    // actually powers the sensor and drives LED/IR-emitter hardware, so it's
+    // started/stopped per capture() instead (see startStreaming()/
+    // stopStreaming() below), keeping the indicator lit only for the
+    // duration of a real capture.
     return true;
   }
 
@@ -484,15 +544,8 @@ class LibcameraCaptureSession : public ICameraCaptureSession {
   }
 
   void close() {
-    if (started_) {
-      camera_->stop();
-      started_ = false;
-    }
+    stopStreaming();
     camera_->requestCompleted.disconnect(&connection_token_);
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      completed_.clear();
-    }
     for (auto& [buffer, mapping] : mappings_) {
       munmap(mapping.base, mapping.size);
     }
@@ -536,7 +589,7 @@ class LibcameraCaptureSession : public ICameraCaptureSession {
   int connection_token_ = 0;
 
   bool acquired_ = false;
-  bool started_ = false;
+  bool streaming_ = false;
 };
 
 }  // namespace

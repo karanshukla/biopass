@@ -14,7 +14,16 @@
 
 namespace biopass {
 
-bool FaceAuth::isAvailable() const { return checkCameraAvailability(face_config_.camera); }
+bool FaceAuth::isAvailable() const {
+  // If the resident camera_session_ is already acquired (see
+  // endAuthenticationSession()), trust it instead of opening a second,
+  // throwaway probe session every call -- that probe alone would eat most of
+  // the savings from keeping camera_session_ warm in the first place.
+  if (camera_session_ && camera_session_->isOpen()) {
+    return true;
+  }
+  return checkCameraAvailability(face_config_.camera);
+}
 
 void FaceAuth::ensureIrSession() {
   if (face_config_.anti_spoofing.ir_camera.has_value() &&
@@ -81,8 +90,18 @@ void FaceAuth::beginAuthenticationSession() {
 }
 
 void FaceAuth::endAuthenticationSession() {
+  // Always torn down: a deliberate anti-spoofing property (see
+  // checkAntiSpoof() in authenticate()) so a later call can never reuse a
+  // partially-warmed IR session to bypass the presence check.
   ir_camera_session_.reset();
-  camera_session_.reset();
+
+  // The RGB session is deliberately left resident (issue #152 follow-up):
+  // LibcameraCaptureSession now only holds the camera acquire()d/
+  // configure()d between calls -- no active streaming, no LED power -- and
+  // starts/stops the actual stream per capture() (see startStreaming()/
+  // stopStreaming() in camera_capture.cc). Keeping it here lets repeat auth
+  // attempts on a warm daemon skip acquire/configure/buffer-allocation, not
+  // just model reload.
 }
 
 AuthResult FaceAuth::authenticate(const std::string& username, const AuthConfig& config,

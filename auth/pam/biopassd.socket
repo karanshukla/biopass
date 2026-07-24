@@ -1,0 +1,13 @@
+[Unit]
+Description=Biopass authentication daemon socket (on-demand activation)
+Documentation=https://github.com/TickLabVN/biopass
+
+[Socket]
+ListenStream=%t/biopass-daemon.sock
+SocketMode=0600
+# %t expands to $XDG_RUNTIME_DIR for a --user unit, matching the path
+# biopassd itself falls back to when self-bound (see socketPath() in
+# daemon.cc).
+
+[Install]
+WantedBy=sockets.target

@@ -26,6 +26,7 @@ ExternalProject_Add(libcamera_ext
         -Dpipelines=uvcvideo -Dipas=[] -Dgstreamer=disabled -Dv4l2=disabled
         -Dcam=disabled -Dqcam=disabled -Dlc-compliance=disabled
         -Dtracing=disabled -Ddocumentation=disabled -Dpycamera=disabled -Dtest=false -Dudev=enabled
+        -Dwerror=false
         <BINARY_DIR> <SOURCE_DIR>
     BUILD_COMMAND   ninja -C <BINARY_DIR>
     INSTALL_COMMAND ninja -C <BINARY_DIR> install

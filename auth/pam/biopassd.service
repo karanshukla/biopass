@@ -1,0 +1,25 @@
+[Unit]
+Description=Biopass resident authentication daemon (warm camera/model cache)
+Documentation=https://github.com/TickLabVN/biopass
+Requires=biopassd.socket
+
+[Service]
+ExecStart=/usr/bin/biopassd
+# Idle-exit timeout: how long the daemon stays resident with no requests
+# before exiting and releasing loaded models + camera handle (see
+# idleTimeoutSeconds() in daemon.cc for the mechanism). No fixed Linux
+# convention mandates a specific value -- 30 minutes comfortably covers a
+# burst of login/unlock/sudo attempts without staying loaded through a whole
+# idle workday. Adjust here if you'd rather it wind down faster/slower.
+Environment=BIOPASSD_IDLE_TIMEOUT_SECS=1800
+Restart=on-failure
+RestartSec=2
+# No special sandboxing here yet: this process needs the same camera/device
+# access the user's own session already has (video group / logind ACLs), so
+# it deliberately runs as a plain --user service rather than a hardened
+# system unit. Revisit with ProtectSystem=/PrivateDevices= scoping once the
+# exact device access pattern is nailed down.
+
+# Deliberately NOT enabled directly (no [Install] WantedBy here) -- this
+# service is spawned on demand by biopassd.socket's activation, not started
+# at login. Enable/start biopassd.socket instead; systemd handles the rest.

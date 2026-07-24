@@ -24,7 +24,17 @@ bool checkAntispoofByIRCamera(const std::string& device_path, FaceDetection* det
     return false;
   }
 
-  // Optional extra delay after warmup frames to let IR LEDs and auto-exposure stabilise.
+  // Power the IR emitter/sensor on *before* the stabilisation sleep so the
+  // sleep actually warms them. Capture sessions only begin streaming on their
+  // first capture(), so without this the delay below would run against a dark,
+  // not-yet-streaming camera and the first attempt would cold-start the stream
+  // and return a black frame — wasting a whole attempt (~1s) every login.
+  if (session && session->isOpen()) {
+    session->warmUp();
+  }
+
+  // Optional extra delay to let the IR emitter and auto-exposure stabilise now
+  // that the stream is actually running.
   if (warmup_delay_ms > 0) {
     spdlog::debug("FaceAuth: IR presence check — sleeping {}ms for camera stabilisation",
                   warmup_delay_ms);

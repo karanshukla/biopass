@@ -28,6 +28,12 @@ class ICameraCaptureSession {
   virtual ~ICameraCaptureSession() = default;
   virtual bool isOpen() const = 0;
   virtual ImageRGB capture() = 0;
+
+  // Start streaming (powering the sensor and, on IR modules, the emitter) ahead
+  // of the first capture() so the caller can let auto-exposure and the IR
+  // emitter ramp during an existing delay instead of burning a cold, black
+  // first frame. No-op by default; safe to call more than once.
+  virtual void warmUp() {}
 };
 
 bool checkCameraAvailability(const std::optional<std::string>& device_path);
