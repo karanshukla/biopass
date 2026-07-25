@@ -24,7 +24,12 @@ target_include_directories(biopass_onnx PUBLIC
 )
 target_link_libraries(biopass_onnx PUBLIC
     ${ONNXRUNTIME_LIB}
+    spdlog::spdlog_header_only
 )
+if(BIOPASS_USE_OPENVINO)
+    target_compile_definitions(biopass_onnx PUBLIC BIOPASS_HAVE_OPENVINO)
+    target_link_libraries(biopass_onnx PUBLIC openvino::runtime)
+endif()
 
 # Shared face utilities (camera capture, debug image I/O).
 add_library(biopass_face_common STATIC

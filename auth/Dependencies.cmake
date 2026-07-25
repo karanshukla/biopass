@@ -86,3 +86,41 @@ target_compile_definitions(sqlite3 PUBLIC
     SQLITE_THREADSAFE=1
     SQLITE_DQS=0
 )
+
+# ------------------------------------------------------------------------
+# OpenVINO (optional): NPU/GPU inference backend, falling back to the ONNX
+# Runtime CPU path above when unavailable at build time or at runtime (no
+# matching device on the host, or the device fails to compile the model).
+# Off by default -- this is experimental and only tested on Intel NPU
+# hardware so far; see onnx_session.cc for the device probe/fallback logic.
+#
+# Vendored (like ONNX Runtime above) rather than found via the system
+# `openvino`/`openvino-devel`/`openvino-plugins` packages: distro packaging
+# lags new NPU silicon by multiple OpenVINO releases (Fedora 44 ships
+# 2025.1.0, whose NPU plugin speaks an older graph-extension protocol than
+# current Intel NPU drivers report -- compile_model() fails outright on
+# newer chips against it). Pin a specific upstream release instead of
+# tracking "latest" so the NPU backend doesn't silently change behavior
+# out from under a build.
+#
+# No plugins.xml ships in this archive -- modern OpenVINO auto-discovers
+# plugins (libopenvino_intel_*_plugin.so, libopenvino_onnx_frontend.so) by
+# scanning next to libopenvino.so itself, so no extra wiring is needed
+# beyond pointing find_package at the extracted runtime/cmake dir.
+# ------------------------------------------------------------------------
+option(BIOPASS_USE_OPENVINO "Enable optional OpenVINO NPU/GPU inference backend" OFF)
+if(BIOPASS_USE_OPENVINO)
+    set(OPENVINO_VERSION "2026.2.1.21919.ede283a88e3")
+    FetchContent_Declare(
+        openvino
+        URL https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.2.1/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION}_x86_64.tgz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(openvino)
+    find_package(OpenVINO REQUIRED CONFIG
+        PATHS "${openvino_SOURCE_DIR}/runtime/cmake"
+        NO_DEFAULT_PATH
+    )
+    set(OPENVINO_LIB_DIR "${openvino_SOURCE_DIR}/runtime/lib/intel64")
+    message(STATUS "Biopass: OpenVINO backend enabled (vendored ${OPENVINO_VERSION}, NPU/GPU with ONNX Runtime CPU fallback)")
+endif()

@@ -94,3 +94,13 @@ install(
     DESTINATION "/usr/lib/biopass"
     FILES_MATCHING PATTERN "*.so*"
 )
+
+# Install OpenVINO runtime + plugin libraries (only when the optional NPU/GPU
+# backend is enabled -- see BIOPASS_USE_OPENVINO in Dependencies.cmake).
+if(BIOPASS_USE_OPENVINO)
+    install(
+        DIRECTORY ${OPENVINO_LIB_DIR}/
+        DESTINATION "/usr/lib/biopass"
+        FILES_MATCHING PATTERN "*.so*"
+    )
+endif()

@@ -7,7 +7,11 @@
 namespace biopass {
 
 FaceDetection::FaceDetection(const std::string& ckpt, int imgsz, const float conf, const float iou)
-    : conf(conf), iou(iou), imgsz(imgsz), session(ckpt, "FaceDetection") {}
+    // allow_openvino=false: this model's export has a dynamic reshape buried
+    // inside the graph that crashes the NPU compiler with a hard abort() --
+    // see the allow_openvino comment on OnnxSession for detail. Stays on the
+    // proven ONNX Runtime CPU path unconditionally until root-caused.
+    : conf(conf), iou(iou), imgsz(imgsz), session(ckpt, "FaceDetection", /*allow_openvino=*/false) {}
 
 std::vector<Detection> FaceDetection::inference(const ImageRGB& image) {
   ImageRGB input_image = imageLetterbox(image, this->imgsz, this->imgsz);
