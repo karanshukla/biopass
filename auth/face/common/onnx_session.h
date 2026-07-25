@@ -26,6 +26,14 @@ namespace biopass {
 // BIOPASS_INFERENCE_DEVICE env var (AUTO|NPU|GPU|CPU) -- CPU always forces
 // ONNX Runtime, skipping the OpenVINO probe entirely.
 //
+// !!! BIOPASS_HAVE_OPENVINO is confirmed to crash the resident biopassd
+// daemon (heap corruption, `malloc(): invalid size`) the first time any
+// OnnxSession here constructs -- even with BIOPASS_INFERENCE_DEVICE=CPU,
+// i.e. without ever calling into the OpenVINO API. Not root-caused; see the
+// warning in Dependencies.cmake and the writeup linked there before
+// re-enabling BIOPASS_USE_OPENVINO for anything other than isolated,
+// single-purpose test binaries.
+//
 // allow_openvino lets a caller opt a model out of the probe altogether
 // regardless of BIOPASS_INFERENCE_DEVICE. FaceDetection (YOLO) passes false:
 // its ONNX export has a dynamic reshape buried inside the graph (not just

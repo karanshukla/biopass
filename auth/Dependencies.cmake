@@ -94,6 +94,25 @@ target_compile_definitions(sqlite3 PUBLIC
 # Off by default -- this is experimental and only tested on Intel NPU
 # hardware so far; see onnx_session.cc for the device probe/fallback logic.
 #
+# !!! DO NOT ENABLE FOR A RESIDENT biopassd DEPLOYMENT YET !!!
+# Confirmed on real hardware (2026-07-25): linking OpenVINO into biopassd
+# crashes it with `malloc(): invalid size (unsorted)` -- a heap-corrupting
+# abort inside ov::Core's own constructor / a subsequent Ort::Session
+# constructor, on a background thread, the *first* time any OnnxSession in
+# the resident daemon process tries to build one. This reproduces even with
+# BIOPASS_INFERENCE_DEVICE=CPU (i.e. the OpenVINO API is never actually
+# called) -- because BIOPASS_USE_OPENVINO links OpenVINO (and its bundled
+# Intel TBB allocator, libtbbmalloc.so.2) into the process unconditionally
+# at *build* time, and just having those libraries loaded alongside
+# biopassd's existing threads (libcamera's thread, ONNX Runtime's own
+# thread pool) is apparently enough to corrupt the heap. This never
+# reproduced in either of two isolated single-purpose test binaries built
+# against the same vendored OpenVINO -- only inside the actual
+# multi-threaded resident daemon. Root cause not yet found; likely a
+# TBB/glibc-malloc or ONNX-Runtime-thread-pool interaction that needs
+# isolating with valgrind/ASan against the real daemon, not a standalone
+# repro. Full writeup: https://github.com/karanshukla/wildcat-lake-linux/blob/main/face-unlock-biopass/npu-openvino-backend.md
+#
 # Vendored (like ONNX Runtime above) rather than found via the system
 # `openvino`/`openvino-devel`/`openvino-plugins` packages: distro packaging
 # lags new NPU silicon by multiple OpenVINO releases (Fedora 44 ships
