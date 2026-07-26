@@ -65,6 +65,7 @@
 #include <spdlog/spdlog.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/timerfd.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -272,6 +273,21 @@ int idleTimeoutSeconds() {
   return 30 * 60;
 }
 
+// (Re)arms `timer_fd` to fire once, idle_timeout_secs from now. Deliberately
+// backed by CLOCK_BOOTTIME rather than relying on poll()'s own timeout
+// (which is CLOCK_MONOTONIC-based under the hood): CLOCK_MONOTONIC does not
+// advance while the system is suspended, so a laptop that suspends/resumes
+// repeatedly would never accumulate 30 continuous *awake* minutes of silence
+// and could stay resident indefinitely -- CLOCK_BOOTTIME counts suspended
+// time too, matching the "idle workday" wall-clock intent described above.
+void armIdleTimer(int timer_fd, int idle_timeout_secs) {
+  itimerspec its{};
+  its.it_value.tv_sec = idle_timeout_secs;
+  if (timerfd_settime(timer_fd, 0, &its, nullptr) != 0) {
+    spdlog::error("biopassd: timerfd_settime() failed: {}", strerror(errno));
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -330,26 +346,41 @@ int main() {
               idle_timeout_secs);
   ResidentAuthenticator authenticator(username);
 
-  while (!g_shutdown.load()) {
-    pollfd pfd{};
-    pfd.fd = server_fd;
-    pfd.events = POLLIN;
+  // See armIdleTimer() for why this is a CLOCK_BOOTTIME timerfd rather than
+  // poll()'s own (CLOCK_MONOTONIC-based) timeout.
+  int idle_timer_fd = timerfd_create(CLOCK_BOOTTIME, 0);
+  if (idle_timer_fd < 0) {
+    spdlog::error("biopassd: timerfd_create() failed: {}", strerror(errno));
+    close(server_fd);
+    return 1;
+  }
+  armIdleTimer(idle_timer_fd, idle_timeout_secs);
 
-    // Block for at most idle_timeout_secs waiting for a new connection. A
-    // timeout here (poll() returning 0) means nobody has authenticated in
-    // that whole window -- that's our cue to exit voluntarily rather than
-    // sit resident with warm models nobody is using.
-    int poll_result = poll(&pfd, 1, idle_timeout_secs * 1000);
+  while (!g_shutdown.load()) {
+    pollfd pfds[2]{};
+    pfds[0].fd = server_fd;
+    pfds[0].events = POLLIN;
+    pfds[1].fd = idle_timer_fd;
+    pfds[1].events = POLLIN;
+
+    // Block indefinitely: the idle deadline is now enforced by idle_timer_fd
+    // becoming readable, not by poll()'s own timeout.
+    int poll_result = poll(pfds, 2, -1);
     if (poll_result < 0) {
       if (errno == EINTR) continue;
       spdlog::error("biopassd: poll() failed: {}", strerror(errno));
       break;
     }
-    if (poll_result == 0) {
+
+    if (pfds[1].revents & POLLIN) {
+      uint64_t expirations = 0;
+      read(idle_timer_fd, &expirations, sizeof(expirations));
       spdlog::info("biopassd: idle for {}s, exiting to free camera/model memory",
                   idle_timeout_secs);
       break;
     }
+
+    if (!(pfds[0].revents & POLLIN)) continue;
 
     sockaddr_un client_addr{};
     socklen_t client_len = sizeof(client_addr);
@@ -362,7 +393,8 @@ int main() {
 
     // Verify the connecting peer is either this same user or root (e.g. a
     // display manager's PAM stack running privileged). Anyone else gets
-    // rejected outright, before we even read their request.
+    // rejected outright, before we even read their request. Deliberately
+    // does NOT re-arm the idle timer -- an untrusted probe isn't real usage.
     ucred peer_cred{};
     socklen_t cred_len = sizeof(peer_cred);
     bool peer_ok = false;
@@ -378,6 +410,8 @@ int main() {
     char buf[512];
     ssize_t n = read(client_fd, buf, sizeof(buf) - 1);
     if (n <= 0) {
+      // Also not a real request (e.g. a probe that connected and hung up) --
+      // doesn't re-arm the idle timer either.
       close(client_fd);
       continue;
     }
@@ -389,16 +423,22 @@ int main() {
     std::string response;
     if (line == "RELEASE") {
       // Best-effort hand-off of the camera to whoever asked (e.g. the
-      // settings UI's enrollment preview) -- doesn't affect idle timeout or
-      // otherwise change the loop's control flow.
+      // settings UI's enrollment preview). Counts as real activity -- it
+      // means a session involving this daemon is actively underway -- so it
+      // does re-arm the idle timer below.
+      spdlog::info("biopassd: RELEASE requested, dropping warm camera handle");
       authenticator.releaseCamera();
       response = "OK\n";
+      armIdleTimer(idle_timer_fd, idle_timeout_secs);
     } else {
       std::string req_username, req_service;
       int result = kPamIgnore;
       if (parseAuthLine(line, req_username, req_service)) {
         result = authenticator.authenticate(req_username, req_service);
+        armIdleTimer(idle_timer_fd, idle_timeout_secs);
       } else {
+        // Malformed request -- not a real auth attempt, so it doesn't re-arm
+        // the idle timer either.
         spdlog::warn("biopassd: malformed request: '{}'", line);
       }
       response = "RESULT " + std::to_string(result) + "\n";
@@ -409,6 +449,7 @@ int main() {
   }
 
   spdlog::info("biopassd: shutting down");
+  close(idle_timer_fd);
   close(server_fd);
   if (self_bound) {
     ::unlink(sock_path.c_str());
