@@ -33,6 +33,10 @@ class AuthManager {
   void setConfig(const AuthConfig &config);
   int authenticate(const std::string &username);
 
+  // Tells every method to give up any exclusive hardware handle it's
+  // holding onto idly between attempts (see IAuthMethod::releaseIdleResources).
+  void releaseCameraResources();
+
  private:
   int runSequential(const std::string &username);
   int runParallel(const std::string &username);

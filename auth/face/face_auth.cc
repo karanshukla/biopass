@@ -104,6 +104,16 @@ void FaceAuth::endAuthenticationSession() {
   // just model reload.
 }
 
+void FaceAuth::releaseIdleResources() {
+  // libcamera only allows one exclusive acquire() per device: if some other
+  // process (e.g. the settings UI's enrollment/preview helper) needs
+  // '/dev/video0' right now, our warm-but-idle hold on it must be dropped
+  // first or that process's own acquire() fails outright. The next auth
+  // attempt just re-opens it, same as any other cold start.
+  camera_session_.reset();
+  ir_camera_session_.reset();
+}
+
 AuthResult FaceAuth::authenticate(const std::string& username, const AuthConfig& config,
                                   std::atomic<bool>* cancel_signal) {
   if (!camera_session_) {

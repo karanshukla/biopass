@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,6 +40,32 @@ fn helper_path() -> String {
     }
 }
 
+// biopassd (see auth/pam/daemon.cc) may be holding '/dev/video0' warm from a
+// recent login/unlock/sudo auth -- libcamera only allows one exclusive
+// acquire() per device, so if we don't ask it to let go first, the
+// biopass-helper preview-session we're about to spawn fails outright with
+// "Failed to acquire camera". Best-effort only: if the daemon isn't running
+// or doesn't respond, there's nothing to release and we proceed as before.
+fn release_daemon_camera() {
+    let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") else {
+        return;
+    };
+    let sock_path = format!("{runtime_dir}/biopass-daemon.sock");
+    let Ok(mut stream) = UnixStream::connect(&sock_path) else {
+        return;
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+    if stream.write_all(b"RELEASE\n").is_err() {
+        return;
+    }
+    // Wait for the "OK" acknowledgement so the daemon has actually released
+    // the camera before we return -- its accept loop handles one connection
+    // at a time, so by the time this read succeeds the release is complete.
+    let mut buf = [0u8; 16];
+    let _ = stream.read(&mut buf);
+}
+
 fn read_line_trim(reader: &mut BufReader<ChildStdout>) -> std::io::Result<String> {
     let mut line = String::new();
     let n = reader.read_line(&mut line)?;
@@ -69,6 +96,8 @@ pub fn start_face_preview(app: AppHandle, camera: Option<String>) -> Result<(), 
     let model_id = &config.methods.face.detection.model_id;
     let detect_model = db::resolve_model_path(&conn, model_id)?
         .ok_or_else(|| format!("Detection model '{}' not found in registry", model_id))?;
+
+    release_daemon_camera();
 
     let mut cmd = Command::new(helper_path());
     cmd.arg("preview-session")

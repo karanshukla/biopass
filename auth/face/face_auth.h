@@ -30,6 +30,7 @@ class FaceAuth : public IAuthMethod {
   uint32_t getRetryDelayMs() const override { return face_config_.retry_delay; }
   void beginAuthenticationSession() override;
   void endAuthenticationSession() override;
+  void releaseIdleResources() override;
   AuthResult authenticate(const std::string& username, const AuthConfig& config,
                           std::atomic<bool>* cancel_signal = nullptr) override;
 

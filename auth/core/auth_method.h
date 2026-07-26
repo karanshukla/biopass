@@ -24,6 +24,16 @@ struct IAuthMethod {
   virtual void endAuthenticationSession() {}
   virtual AuthResult authenticate(const std::string& username, const AuthConfig& config,
                                   std::atomic<bool>* cancelSignal = nullptr) = 0;
+
+  // Releases any exclusive hardware handle this method is holding onto
+  // between authentication attempts (e.g. a resident daemon's warm camera
+  // session), so an external process can take it over. Unlike
+  // endAuthenticationSession(), which intentionally leaves warm state in
+  // place after a normal auth attempt, this is for the rarer case where
+  // something outside this process needs the device right now. Default
+  // no-op for methods that don't hold onto exclusive resources between
+  // calls.
+  virtual void releaseIdleResources() {}
 };
 
 struct RetryStrategy {

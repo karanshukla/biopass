@@ -30,6 +30,12 @@ void AuthManager::addMethod(std::unique_ptr<IAuthMethod> method) {
 void AuthManager::setMode(ExecutionMode mode) { this->mode_ = mode; }
 void AuthManager::setConfig(const AuthConfig& config) { this->config_ = config; }
 
+void AuthManager::releaseCameraResources() {
+  for (auto& method : this->methods_) {
+    method->releaseIdleResources();
+  }
+}
+
 int AuthManager::authenticate(const std::string& username) {
   if (this->methods_.empty()) {
     spdlog::error("AuthManager: No authentication methods configured");

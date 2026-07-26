@@ -52,6 +52,13 @@
 // `RESULT <code>\n` where code is 0 (PAM_SUCCESS), 1 (PAM_AUTH_ERR), or
 // 2 (PAM_IGNORE) -- the same codes biopass-helper's process exit code
 // already uses, so pam.cc's result handling is unchanged either way.
+//
+// A second request, `RELEASE\n` -> `OK\n`, exists purely so another local
+// process (namely the settings UI, before it spawns biopass-helper
+// preview-session for enrollment) can ask us to drop any camera device
+// we're holding warm between auth attempts. Without this, the UI's helper
+// and this daemon fight over the same exclusive-access libcamera handle
+// whenever an idle warm window overlaps with enrollment/preview.
 
 #include <security/_pam_types.h>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -178,6 +185,17 @@ class ResidentAuthenticator {
 
     int retval = cached_manager_->authenticate(username);
     return (retval == PAM_SUCCESS) ? kPamSuccess : kPamAuthErr;
+  }
+
+  // Handles a "RELEASE" request: an external process (e.g. the settings UI
+  // about to spawn biopass-helper for enrollment/preview) needs the camera
+  // device we may be holding warm. Shares the same mutex as authenticate()
+  // so this can never race a concurrent auth attempt's camera use.
+  void releaseCamera() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (cached_manager_) {
+      cached_manager_->releaseCameraResources();
+    }
   }
 
  private:
@@ -368,15 +386,24 @@ int main() {
     // Trim trailing newline.
     while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
 
-    std::string req_username, req_service;
-    int result = kPamIgnore;
-    if (parseAuthLine(line, req_username, req_service)) {
-      result = authenticator.authenticate(req_username, req_service);
+    std::string response;
+    if (line == "RELEASE") {
+      // Best-effort hand-off of the camera to whoever asked (e.g. the
+      // settings UI's enrollment preview) -- doesn't affect idle timeout or
+      // otherwise change the loop's control flow.
+      authenticator.releaseCamera();
+      response = "OK\n";
     } else {
-      spdlog::warn("biopassd: malformed request: '{}'", line);
+      std::string req_username, req_service;
+      int result = kPamIgnore;
+      if (parseAuthLine(line, req_username, req_service)) {
+        result = authenticator.authenticate(req_username, req_service);
+      } else {
+        spdlog::warn("biopassd: malformed request: '{}'", line);
+      }
+      response = "RESULT " + std::to_string(result) + "\n";
     }
 
-    std::string response = "RESULT " + std::to_string(result) + "\n";
     write(client_fd, response.c_str(), response.size());
     close(client_fd);
   }
